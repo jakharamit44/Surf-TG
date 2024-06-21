@@ -198,19 +198,17 @@ async def editConfig_route(request):
 
 
 @routes.get('/')
-async def home_route(request):
+async def home_route_handler(request):
     session = await get_session(request)
-    if username := session.get('user'):
+    username = session.get('user')
+    if username:
         try:
             channels = await get_chats()
-            playlists = await db.get_Dbfolder()
             phtml = await posts_chat(channels)
-            dhtml = await post_playlist(playlists)
-            is_admin = username == Telegram.ADMIN_USERNAME
-            return web.Response(text=await render_page(None, None, route='home', html=phtml, playlist=dhtml, is_admin=is_admin), content_type='text/html')
+            return web.Response(text=await render_page(None, None, is_home=True, html=phtml), content_type='text/html')
         except Exception as e:
             logging.critical(e.with_traceback(None))
-            raise web.HTTPInternalServerError(text=str(e)) from e
+            raise web.HTTPInternalServerError(text=str(e))
 
 
 
