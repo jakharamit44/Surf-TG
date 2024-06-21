@@ -30,7 +30,7 @@ db = Database()
 async def login_form(request):
     session = await get_session(request)
     redirect_url = session.get('redirect_url', '/')
-    return web.Response(text=await render_page(None, None, route='login', redirect_url=redirect_url), content_type='text/html')
+    return web.Response(text=await render_page(None, None, is_login=True, redirect_url=redirect_url), content_type='text/html')
 
 
 @routes.post('/login')
