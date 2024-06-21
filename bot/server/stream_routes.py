@@ -25,7 +25,25 @@ client_cache = {}
 routes = web.RouteTableDef()
 db = Database()
 
-# Other routes and functions remain unchanged...
+
+@routes.get('/login')
+async def login_form(request):
+    session = await get_session(request)
+    redirect_url = session.get('redirect_url', '/')
+    return web.Response(text=await render_page(None, None, route='login', redirect_url=redirect_url), content_type='text/html')
+
+
+@routes.post('/login')
+async def login_route(request):
+    data = await request.post()
+    # Perform any necessary validation here
+    # For example, you might validate credentials against a database or another source
+    
+    # Assuming validation is successful, redirect to '/'
+    redirect_url = '/'
+    return web.HTTPFound(redirect_url)
+
+
 
 @routes.post('/logout')
 async def logout_route(request):
@@ -33,7 +51,151 @@ async def logout_route(request):
     session.pop('user', None)
     return web.HTTPFound('/login')
 
-# Other routes and functions remain unchanged...
+
+@routes.post('/create')
+async def create_route(request):
+    session = await get_session(request)
+    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+        return web.json_response({'msg': 'Who the hell you are'})
+    data = await request.post()
+    folderName = data.get('folderName')
+    thumbnail = data.get('thumbnail')
+    parent_dir = data.get('parent_dir')
+    parent_dir = parent_dir.split('db=')[-1] if 'db=' in parent_dir else 'root'
+    await db.create_folder(parent_dir, folderName, thumbnail)
+    if parent_dir == 'root':
+        return web.HTTPFound('/')
+    else:
+        return web.HTTPFound(f'/playlist?db={parent_dir}')
+
+
+@routes.post('/delete')
+async def delete_route(request):
+    session = await get_session(request)
+    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+        return web.json_response({'msg': 'Who the hell you are'})
+    data = await request.json()
+    id = data.get('delete_id')
+    parent = data.get('parent')
+    if not (success := db.delete(id)):
+        return web.HTTPInternalServerError()
+    if parent == 'root':
+        return web.HTTPFound('/')
+    else:
+        return web.HTTPFound(f'/playlist?db={parent}')
+
+
+@routes.post('/edit')
+async def editFolder_route(request):
+    session = await get_session(request)
+    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+        return web.json_response({'msg': 'Who the hell you are'})
+    data = await request.post()
+    folderName = data.get('folderName')
+    thumbnail = data.get('thumbnail')
+    id = data.get('folder_id')
+    parent = data.get('parent')
+    success = await db.edit(id, folderName, thumbnail)
+    if not success:
+        return web.HTTPInternalServerError()
+    if parent == 'root':
+        return web.HTTPFound('/')
+    else:
+        return web.HTTPFound(f'/playlist?db={parent}')
+
+
+@routes.post('/edit_post')
+async def editPost_route(request):
+    session = await get_session(request)
+    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+        return web.json_response({'msg': 'Who the hell you are'})
+    data = await request.post()
+    fileName = data.get('fileName')
+    thumbnail = data.get('filethumbnail')
+    id = data.get('file_id')
+    parent = data.get('file_folder_id')
+    success = await db.edit(id, fileName, thumbnail)
+    if not success:
+        return web.HTTPInternalServerError()
+    if parent == 'root':
+        return web.HTTPFound('/')
+    else:
+        return web.HTTPFound(f'/playlist?db={parent}')
+
+
+@routes.get('/searchDbFol')
+async def searchDbFolder_route(request):
+    session = await get_session(request)
+    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+        return web.json_response({'msg': 'Who the hell you are'})
+    query = request.query.get('query', '')
+    folder_names = await db.search_DbFolder(query)
+    return web.json_response(folder_names)
+
+
+@routes.post('/send')
+async def send_route(request):
+    data = await request.post()
+    chat_id = data.get('chatId')
+    chat_id = f"-100{chat_id}"
+    folder_id = data.get('folderId')
+    selected_ids = data.get('selectedIds')
+    if not all([chat_id, folder_id, selected_ids]):
+        return {'error': 'Missing required data in request'}
+
+    formatted_entries = []
+    for entry in selected_ids.split(','):
+        file_id, hash, filename, size, file_type, thumbnail = entry.split('|')
+        formatted_entries.append({
+            'chat_id': chat_id,
+            'parent_folder': folder_id,
+            'file_id': file_id,
+            'hash': hash,
+            'name': filename,
+            'size': size,
+            'file_type': file_type,
+            'thumbnail': thumbnail,
+            'type': 'file'
+        })
+
+    json_data = json.dumps(formatted_entries)
+    data = json.loads(json_data)
+    await db.add_json(data)
+    if folder_id == 'root':
+        return web.HTTPFound('/')
+    else:
+        return web.HTTPFound(f'/playlist?db={folder_id}')
+
+
+@routes.get('/reload')
+async def reload_route(request):
+    session = await get_session(request)
+    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+        return web.json_response({'msg': 'Who the hell you are'})
+
+    chat_id = request.query.get('chatId', '')
+    if chat_id == 'home':
+        rm_cache()
+        return web.HTTPFound('/')
+    else:
+        rm_cache(f"-100{chat_id}")
+        return web.HTTPFound(f'/channel/{chat_id}')
+
+
+@routes.post('/config')
+async def editConfig_route(request):
+    session = await get_session(request)
+    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+        return web.json_response({'msg': 'Who the hell you are'})
+    data = await request.post()
+    channel = data.get('channel')
+    theme = data.get('theme')
+    success = await db.update_config(theme=theme, auth_channel=channel)
+    if not success:
+        return web.HTTPInternalServerError()
+    return web.HTTPFound('/')
+
+
 
 @routes.get('/')
 async def home_route(request):
@@ -49,11 +211,8 @@ async def home_route(request):
         except Exception as e:
             logging.critical(e.with_traceback(None))
             raise web.HTTPInternalServerError(text=str(e)) from e
-    else:
-        session['redirect_url'] = request.path_qs
-        return web.HTTPFound('/login')
 
-# Other routes and functions remain unchanged...
+
 
 @routes.get('/playlist')
 async def playlist_route(request):
@@ -72,9 +231,7 @@ async def playlist_route(request):
         except Exception as e:
             logging.critical(e.with_traceback(None))
             raise web.HTTPInternalServerError(text=str(e)) from e
-    else:
-        session['redirect_url'] = request.path_qs
-        return web.HTTPFound('/login')
+
 
 
 @routes.get('/search/db/{parent}')
@@ -94,9 +251,7 @@ async def dbsearch_route(request):
         except Exception as e:
             logging.critical(e.with_traceback(None))
             raise web.HTTPInternalServerError(text=str(e)) from e
-    else:
-        session['redirect_url'] = request.path_qs
-        return web.HTTPFound('/login')
+
 
 
 @routes.get('/channel/{chat_id}')
@@ -115,9 +270,7 @@ async def channel_route(request):
         except Exception as e:
             logging.critical(e.with_traceback(None))
             raise web.HTTPInternalServerError(text=str(e)) from e
-    else:
-        session['redirect_url'] = request.path_qs
-        return web.HTTPFound('/login')
+
 
 
 @routes.get('/search/{chat_id}')
@@ -138,9 +291,7 @@ async def search_route(request):
         except Exception as e:
             logging.critical(e.with_traceback(None))
             raise web.HTTPInternalServerError(text=str(e)) from e
-    else:
-        session['redirect_url'] = request.path_qs
-        return web.HTTPFound('/login')
+
 
 
 @routes.get('/api/thumb/{chat_id}', allow_head=True)
@@ -175,9 +326,7 @@ async def stream_handler_watch(request: web.Request):
         except Exception as e:
             logging.critical(e.with_traceback(None))
             raise web.HTTPInternalServerError(text=str(e)) from e
-    else:
-        session['redirect_url'] = request.path_qs
-        return web.HTTPFound('/login')
+
 
 
 @routes.get('/{chat_id}/{encoded_name}', allow_head=True)
